@@ -8,6 +8,7 @@ This skill uses macOS `say` locally, so speech does not send the spoken text thr
 
 - Read the latest Codex final answer from the local transcript.
 - Read the next final answer automatically with `next`.
+- Turn on thread-scoped automatic read-aloud for every future final answer.
 - Read clipboard text, inline text, or Markdown files.
 - Use speed multipliers such as `--speed 1x`, `--speed 1.5x`, and `--speed 2x`.
 - Skip fenced code blocks silently for a more natural listening flow.
@@ -52,11 +53,17 @@ In Codex chat:
 ```text
 /say
 /say next
+/say auto on
+/say auto off
+/say auto status
 /say clipboard
 /say stop
 
 $say
 $say next
+$say auto on
+$say auto off
+$say auto status
 $say clipboard
 $say stop
 ```
@@ -68,6 +75,10 @@ codex-say "Read this aloud"
 codex-say --speed 1.5x "Read this faster"
 codex-say -f report.md
 codex-say --clipboard
+codex-say auto on
+codex-say auto speed 1.5x
+codex-say auto status
+codex-say auto off
 codex-say --stop
 ```
 
@@ -76,6 +87,30 @@ Exact speech rates still work:
 ```bash
 codex-say -r 220 report.md
 ```
+
+## Automatic Mode
+
+Use automatic mode when you want every future final answer in the current Codex thread to be read aloud:
+
+```text
+/say auto on
+```
+
+Tune the speed:
+
+```text
+/say auto speed 1.5x
+/say auto rate 220
+```
+
+Check or disable it:
+
+```text
+/say auto status
+/say auto off
+```
+
+Automatic mode is thread-scoped. It watches the local Codex transcript, remembers the last line it already handled, and only speaks future `final_answer` messages. `/say stop` stops the current voice and pending one-shot `next` watchers; `/say auto off` disables automatic future answers.
 
 ## Token Note
 

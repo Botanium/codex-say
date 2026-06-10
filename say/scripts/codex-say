@@ -15,10 +15,14 @@ input_file=""
 force_clipboard=0
 force_latest=0
 timeout=180
+auto_action=""
 watch_next_internal=0
+watch_auto_internal=0
 watch_session_path=""
 watch_baseline_lines=""
 watch_launch_label=""
+watch_auto_state_dir=""
+watch_auto_label=""
 args=()
 self_path="$(
   cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -36,6 +40,10 @@ Usage:
   codex-say report.md               Read a file aloud if the path exists
   codex-say --latest                Read the latest assistant message in this Codex thread
   codex-say next                    Speak the next assistant message when it is written
+  codex-say auto on                 Speak every future final answer in this thread
+  codex-say auto off                Disable automatic read-aloud for this thread
+  codex-say auto status             Show automatic read-aloud status
+  codex-say auto speed 1.5x         Enable or update automatic read-aloud speed
   pbpaste | codex-say               Read piped text aloud
 
 Useful options:
@@ -47,6 +55,7 @@ Useful options:
       --latest                      Read latest assistant message from local Codex transcript
       --next                        Wait for and read next assistant message
       --timeout N                   Timeout in seconds for --next, default 180
+      --auto on|off|status          Manage thread automatic read-aloud
       --raw                         Do not clean Markdown before speaking
       --foreground                  Wait until speech finishes
       --save PATH                   Save speech audio instead of playing
@@ -139,6 +148,40 @@ while [[ $# -gt 0 ]]; do
       voice="${6:-}"
       watch_launch_label="${7:-}"
       shift 7
+      ;;
+    --watch-auto-internal)
+      watch_auto_internal=1
+      watch_auto_state_dir="${2:?Missing state dir for $1}"
+      watch_auto_label="${3:-}"
+      shift 3
+      ;;
+    --auto)
+      auto_action="${2:-status}"
+      if [[ "$auto_action" == "speed" ]]; then
+        rate="$(rate_for_speed "${3:?Missing speed value for --auto speed}")"
+        auto_action="on"
+        shift 3
+      elif [[ "$auto_action" == "rate" ]]; then
+        rate="${3:?Missing rate value for --auto rate}"
+        auto_action="on"
+        shift 3
+      else
+        shift "$(( $# >= 2 ? 2 : 1 ))"
+      fi
+      ;;
+    auto)
+      auto_action="${2:-status}"
+      if [[ "$auto_action" == "speed" ]]; then
+        rate="$(rate_for_speed "${3:?Missing speed value for auto speed}")"
+        auto_action="on"
+        shift 3
+      elif [[ "$auto_action" == "rate" ]]; then
+        rate="${3:?Missing rate value for auto rate}"
+        auto_action="on"
+        shift 3
+      else
+        shift "$(( $# >= 2 ? 2 : 1 ))"
+      fi
       ;;
     --raw)
       raw=1
@@ -260,6 +303,53 @@ sys.stdout.write(max(paths, key=os.path.getmtime))
 PY
 }
 
+auto_state_dir_for_thread() {
+  /usr/bin/python3 - <<'PY'
+import hashlib
+import os
+import re
+import sys
+
+thread_id = os.environ.get("CODEX_THREAD_ID", "").strip()
+if not thread_id:
+    sys.exit(1)
+
+digest = hashlib.sha1(thread_id.encode("utf-8")).hexdigest()[:8]
+safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", thread_id).strip(".-_") or "thread"
+safe = safe[:72]
+sys.stdout.write(os.path.join(os.path.expanduser("~"), ".local", "state", "codex-say", f"{safe}-{digest}"))
+PY
+}
+
+auto_launch_label_for_thread() {
+  /usr/bin/python3 - <<'PY'
+import hashlib
+import os
+import re
+import sys
+
+thread_id = os.environ.get("CODEX_THREAD_ID", "").strip()
+if not thread_id:
+    sys.exit(1)
+
+digest = hashlib.sha1(thread_id.encode("utf-8")).hexdigest()[:8]
+safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", thread_id).strip(".-_") or "thread"
+safe = safe[:48]
+sys.stdout.write(f"com.botanium.codex-say-auto.{safe}.{digest}")
+PY
+}
+
+launchd_label_active() {
+  label="${1:?Missing launchd label}"
+  /bin/launchctl print "gui/$(/usr/bin/id -u)/$label" >/dev/null 2>&1
+}
+
+auto_enabled_current_thread() {
+  state_dir="$(auto_state_dir_for_thread 2>/dev/null)" || return 1
+  label="$(auto_launch_label_for_thread 2>/dev/null)" || return 1
+  [[ -f "$state_dir/enabled" ]] && launchd_label_active "$label"
+}
+
 read_next_codex_message() {
   /usr/bin/python3 - "$watch_session_path" "$watch_baseline_lines" "$timeout" <<'PY'
 import json
@@ -316,16 +406,124 @@ sys.exit(2)
 PY
 }
 
+read_auto_codex_message() {
+  /usr/bin/python3 - "$watch_auto_state_dir" <<'PY'
+import json
+import os
+import sys
+import time
+
+state_dir = sys.argv[1]
+enabled_path = os.path.join(state_dir, "enabled")
+session_path_path = os.path.join(state_dir, "session_path")
+cursor_path = os.path.join(state_dir, "cursor")
+
+def read_text(path, default=""):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except FileNotFoundError:
+        return default
+
+def write_text(path, value):
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(str(value))
+        handle.write("\n")
+    os.replace(tmp, path)
+
+def extract_text(content):
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            text = item.get("text") or item.get("content") or item.get("output_text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "\n".join(part for part in parts if part.strip())
+
+while True:
+    if not os.path.exists(enabled_path):
+        sys.exit(3)
+
+    session_path = read_text(session_path_path)
+    try:
+        cursor = int(read_text(cursor_path, "0") or "0")
+    except ValueError:
+        cursor = 0
+
+    if not session_path:
+        time.sleep(0.25)
+        continue
+
+    current_line = 0
+    try:
+        with open(session_path, "r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, 1):
+                current_line = line_number
+                if line_number <= cursor:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("type") != "response_item":
+                    continue
+                payload = record.get("payload") or {}
+                if payload.get("type") != "message" or payload.get("role") != "assistant":
+                    continue
+                if payload.get("phase") != "final_answer":
+                    continue
+                text = extract_text(payload.get("content"))
+                write_text(cursor_path, line_number)
+                if text.strip():
+                    sys.stdout.write(text)
+                    sys.exit(0)
+    except FileNotFoundError:
+        time.sleep(0.25)
+        continue
+
+    if current_line != cursor:
+        write_text(cursor_path, current_line)
+    time.sleep(0.25)
+PY
+}
+
+clean_markdown_text() {
+  /usr/bin/perl -0pe '
+    s/\r\n/\n/g;
+    s/```[^\n]*\n.*?```/\n/gs;
+    s/`([^`\n]+)`/$1/g;
+    s/!\[([^\]]*)\]\([^)]+\)/$1/g;
+    s/\[([^\]]+)\]\([^)]+\)/$1/g;
+    s/^\s{0,3}#{1,6}\s*//mg;
+    s/^\s{0,3}>\s?//mg;
+    s/^\s*[-*+]\s+//mg;
+    s/^\s*\d+[.)]\s+//mg;
+    s/^\s*\|(.+)\|\s*$/ $1 /mg;
+    s/\|/ , /g;
+    s/[ \t]+/ /g;
+    s/\n{3,}/\n\n/g;
+  '
+}
+
 cleanup_codex_say_processes() {
-  include_watchers="${1:-0}"
-  /usr/bin/python3 - "$include_watchers" <<'PY'
+  include_next="${1:-0}"
+  include_auto="${2:-0}"
+  /usr/bin/python3 - "$include_next" "$include_auto" <<'PY'
 import os
 import re
 import subprocess
 import sys
 import time
 
-include_watchers = sys.argv[1] == "1"
+include_next = sys.argv[1] == "1"
+include_auto = sys.argv[2] == "1"
 own_pid = os.getpid()
 parent_pid = os.getppid()
 
@@ -333,9 +531,13 @@ active_patterns = [
     "/usr/bin/say",
     "text_file=",
 ]
-watcher_patterns = [
+next_watcher_patterns = [
     "codex-say --watch-next-internal",
     "codex-say' '--watch-next-internal",
+]
+auto_watcher_patterns = [
+    "codex-say --watch-auto-internal",
+    "codex-say' '--watch-auto-internal",
 ]
 
 def remove_launchd_jobs():
@@ -350,6 +552,11 @@ def remove_launchd_jobs():
         return
     labels = sorted(set(re.findall(r"com\.botanium\.codex-say[^\s]+", printed)))
     for label in labels:
+        remove = label.startswith("com.botanium.codex-say.")
+        remove = remove or (include_next and label.startswith("com.botanium.codex-say-next."))
+        remove = remove or (include_auto and label.startswith("com.botanium.codex-say-auto."))
+        if not remove:
+            continue
         subprocess.run(
             ["launchctl", "remove", label],
             stdout=subprocess.DEVNULL,
@@ -379,8 +586,10 @@ def matching_pids():
         if "ps ax -o" in cmd or "rg codex-say" in cmd:
             continue
         should_kill = any(pattern in cmd for pattern in active_patterns)
-        if include_watchers:
-            should_kill = should_kill or any(pattern in cmd for pattern in watcher_patterns)
+        if include_next:
+            should_kill = should_kill or any(pattern in cmd for pattern in next_watcher_patterns)
+        if include_auto:
+            should_kill = should_kill or any(pattern in cmd for pattern in auto_watcher_patterns)
         if should_kill:
             matches.append(pid)
     return matches
@@ -405,14 +614,225 @@ remove_launchd_jobs()
 PY
 }
 
+kill_auto_watcher_for_state() {
+  state_dir="${1:?Missing auto state dir}"
+  /usr/bin/python3 - "$state_dir" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+import time
+
+state_dir = os.path.realpath(sys.argv[1])
+own_pid = os.getpid()
+parent_pid = os.getppid()
+
+def matching_pids():
+    out = subprocess.run(
+        ["ps", "ax", "-o", "pid=,ppid=,command="],
+        text=True,
+        capture_output=True,
+        check=False,
+    ).stdout
+    matches = []
+    for line in out.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parts = stripped.split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid = int(parts[0])
+        cmd = parts[2]
+        if pid in {own_pid, parent_pid}:
+            continue
+        if "--watch-auto-internal" in cmd and state_dir in cmd:
+            matches.append(pid)
+    return matches
+
+for sig in (signal.SIGTERM, signal.SIGKILL):
+    for _ in range(8):
+        pids = matching_pids()
+        if not pids:
+            sys.exit(0)
+        for pid in pids:
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                pass
+        time.sleep(0.2)
+PY
+}
+
+show_auto_status() {
+  state_dir="$(auto_state_dir_for_thread 2>/dev/null)" || {
+    echo "Auto read-aloud is off: no current Codex thread was found."
+    return 0
+  }
+  label="$(auto_launch_label_for_thread)"
+  rate_file="$state_dir/rate"
+  voice_file="$state_dir/voice"
+  session_file="$state_dir/session_path"
+  cursor_file="$state_dir/cursor"
+  saved_rate="$(/bin/cat "$rate_file" 2>/dev/null || true)"
+  saved_voice="$(/bin/cat "$voice_file" 2>/dev/null || true)"
+  saved_session="$(/bin/cat "$session_file" 2>/dev/null || true)"
+  saved_cursor="$(/bin/cat "$cursor_file" 2>/dev/null || true)"
+
+  if [[ -f "$state_dir/enabled" ]] && launchd_label_active "$label"; then
+    echo "Auto read-aloud is on for this Codex thread."
+  elif [[ -f "$state_dir/enabled" ]]; then
+    echo "Auto read-aloud is configured for this thread, but the watcher is not running."
+  else
+    echo "Auto read-aloud is off for this Codex thread."
+  fi
+
+  if [[ -n "$saved_rate" ]]; then
+    echo "Rate: ${saved_rate} wpm"
+  fi
+  if [[ -n "$saved_voice" ]]; then
+    echo "Voice: $saved_voice"
+  fi
+  if [[ -n "$saved_session" ]]; then
+    echo "Transcript: $saved_session"
+  fi
+  if [[ -n "$saved_cursor" ]]; then
+    echo "Cursor line: $saved_cursor"
+  fi
+}
+
+start_auto_read_aloud() {
+  session_path="$(current_codex_session_path)" || {
+    echo "Could not find the current Codex session transcript for auto mode." >&2
+    exit 1
+  }
+  state_dir="$(auto_state_dir_for_thread)" || {
+    echo "Auto mode needs a current Codex thread." >&2
+    exit 1
+  }
+  label="$(auto_launch_label_for_thread)"
+  baseline_lines="$(/usr/bin/wc -l < "$session_path" | /usr/bin/tr -d ' ')"
+  cursor="$baseline_lines"
+
+  if [[ -f "$state_dir/enabled" ]] && launchd_label_active "$label"; then
+    existing_session="$(/bin/cat "$state_dir/session_path" 2>/dev/null || true)"
+    existing_cursor="$(/bin/cat "$state_dir/cursor" 2>/dev/null || true)"
+    if [[ "$existing_session" == "$session_path" && "$existing_cursor" =~ ^[0-9]+$ ]]; then
+      cursor="$existing_cursor"
+    fi
+  fi
+
+  /bin/launchctl remove "$label" >/dev/null 2>&1 || true
+  if [[ -d "$state_dir" ]]; then
+    kill_auto_watcher_for_state "$state_dir" || true
+  fi
+
+  /bin/mkdir -p "$state_dir"
+  printf '1\n' > "$state_dir/enabled"
+  printf '%s\n' "$session_path" > "$state_dir/session_path"
+  printf '%s\n' "$cursor" > "$state_dir/cursor"
+  printf '%s\n' "$rate" > "$state_dir/rate"
+  printf '%s\n' "$voice" > "$state_dir/voice"
+  printf '%s\n' "$raw" > "$state_dir/raw"
+  printf '%s\n' "$label" > "$state_dir/label"
+
+  if ! /bin/launchctl submit -l "$label" -- "$self_path" --watch-auto-internal "$state_dir" "$label"; then
+    /bin/rm -f "$state_dir/enabled"
+    echo "Could not start auto read-aloud watcher." >&2
+    exit 1
+  fi
+
+  echo "Auto read-aloud is on for this Codex thread at ${rate} wpm. Disable with: codex-say auto off"
+}
+
+stop_auto_read_aloud() {
+  state_dir="$(auto_state_dir_for_thread 2>/dev/null || true)"
+  label="$(auto_launch_label_for_thread 2>/dev/null || true)"
+
+  if [[ -n "$state_dir" && -n "$label" ]]; then
+    /bin/rm -f "$state_dir/enabled" 2>/dev/null || true
+    /bin/launchctl remove "$label" >/dev/null 2>&1 || true
+    kill_auto_watcher_for_state "$state_dir" || true
+    /bin/rm -rf "$state_dir" 2>/dev/null || true
+    cleanup_codex_say_processes 1 0
+    echo "Auto read-aloud is off for this Codex thread."
+  else
+    cleanup_codex_say_processes 1 1
+    echo "Auto read-aloud is off."
+  fi
+}
+
+run_auto_watcher() {
+  if [[ -n "$watch_auto_label" ]]; then
+    trap '/bin/launchctl remove "$watch_auto_label" >/dev/null 2>&1 || true' EXIT
+  fi
+
+  while [[ -f "$watch_auto_state_dir/enabled" ]]; do
+    if ! text="$(read_auto_codex_message)"; then
+      exit 0
+    fi
+    if [[ -z "${text//[[:space:]]/}" ]]; then
+      continue
+    fi
+
+    current_rate="$(/bin/cat "$watch_auto_state_dir/rate" 2>/dev/null || printf '%s' "$rate")"
+    current_voice="$(/bin/cat "$watch_auto_state_dir/voice" 2>/dev/null || true)"
+    current_raw="$(/bin/cat "$watch_auto_state_dir/raw" 2>/dev/null || printf '0')"
+
+    if [[ "$current_raw" != "1" ]]; then
+      text="$(printf '%s' "$text" | clean_markdown_text)"
+    fi
+
+    tmp_file="$(/usr/bin/mktemp -t codex-say-auto)"
+    printf '%s\n' "$text" > "$tmp_file"
+    cleanup_codex_say_processes 1 0
+    if [[ -n "$current_voice" ]]; then
+      /usr/bin/say -v "$current_voice" -r "$current_rate" -f "$tmp_file" || true
+    else
+      /usr/bin/say -r "$current_rate" -f "$tmp_file" || true
+    fi
+    /bin/rm -f "$tmp_file"
+  done
+}
+
+case "$auto_action" in
+  ""|on|off|status)
+    ;;
+  *)
+    echo "Unknown auto command: $auto_action" >&2
+    echo "Use: codex-say auto on | off | status | speed 1.5x | rate 220" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$watch_auto_internal" -eq 1 ]]; then
+  run_auto_watcher
+  exit 0
+fi
+
+if [[ "$auto_action" == "status" ]]; then
+  show_auto_status
+  exit 0
+elif [[ "$auto_action" == "off" ]]; then
+  stop_auto_read_aloud
+  exit 0
+elif [[ "$auto_action" == "on" ]]; then
+  start_auto_read_aloud
+  exit 0
+fi
+
 if [[ "$stop" -eq 1 ]]; then
-  cleanup_codex_say_processes 1
+  cleanup_codex_say_processes 1 0
   echo "Stopped macOS speech."
   exit 0
 fi
 
 if [[ "$next" -eq 1 ]]; then
-  cleanup_codex_say_processes 1
+  if auto_enabled_current_thread; then
+    echo "Auto read-aloud is already on for this thread; it will speak the next final answer."
+    exit 0
+  fi
+  cleanup_codex_say_processes 1 0
   session_path="$(current_codex_session_path)" || {
     echo "Could not find the current Codex session transcript for --next." >&2
     exit 1
@@ -488,25 +908,11 @@ if [[ -z "${text//[[:space:]]/}" ]]; then
 fi
 
 if [[ "$watch_next_internal" -eq 0 ]]; then
-  cleanup_codex_say_processes 1
+  cleanup_codex_say_processes 1 0
 fi
 
 if [[ "$raw" -eq 0 ]]; then
-  text="$(printf '%s' "$text" | /usr/bin/perl -0pe '
-    s/\r\n/\n/g;
-    s/```[^\n]*\n.*?```/\n/gs;
-    s/`([^`\n]+)`/$1/g;
-    s/!\[([^\]]*)\]\([^)]+\)/$1/g;
-    s/\[([^\]]+)\]\([^)]+\)/$1/g;
-    s/^\s{0,3}#{1,6}\s*//mg;
-    s/^\s{0,3}>\s?//mg;
-    s/^\s*[-*+]\s+//mg;
-    s/^\s*\d+[.)]\s+//mg;
-    s/^\s*\|(.+)\|\s*$/ $1 /mg;
-    s/\|/ , /g;
-    s/[ \t]+/ /g;
-    s/\n{3,}/\n\n/g;
-  ')"
+  text="$(printf '%s' "$text" | clean_markdown_text)"
 fi
 
 chars="$(printf '%s' "$text" | /usr/bin/wc -c | /usr/bin/tr -d ' ')"

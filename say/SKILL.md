@@ -13,9 +13,19 @@ Command naming: `/say` and `$say` are Codex chat invocations. `codex-say` is the
 
 ## Routing
 
+- If the user asks to turn automatic read-aloud on for future answers, run:
+  `scripts/codex-say auto on`
+  This starts a thread-scoped local watcher for future `phase=final_answer` messages.
+- If the user asks to disable automatic read-aloud, run:
+  `scripts/codex-say auto off`
+- If the user asks whether automatic read-aloud is enabled, run:
+  `scripts/codex-say auto status`
+- If the user asks to change automatic read-aloud speed, run one of:
+  `scripts/codex-say auto speed 1.5x`
+  `scripts/codex-say auto rate 220`
 - If the user asks to stop speech, run:
   `scripts/codex-say --stop`
-  This stops active speech plus any pending `next` watcher.
+  This stops active speech plus any pending `next` watcher. It does not disable automatic future answers; use `auto off` for that.
 - If the user asks to read the answer to the current prompt, or invokes `$say next`, `/say next`, `$say` with `next`, or `/read next`, run:
   `scripts/codex-say next`
   Do this before producing the final answer so the local watcher can speak the next `phase=final_answer` message after it is written to the Codex transcript.
@@ -34,11 +44,13 @@ Command naming: `/say` and `$say` are Codex chat invocations. `codex-say` is the
 
 - Do not send a commentary/progress message before running the helper; that short message can become the latest assistant response and be spoken instead of the useful answer.
 - For `next`, run `scripts/codex-say next` before the final response and avoid any further commentary messages before final.
+- For `auto on`, run `scripts/codex-say auto on`; afterward the local watcher reads future final answers without needing the user to add `next` to every prompt.
 - Do not `cat`, `pbpaste`, or otherwise print large content into the model context just to read it aloud.
 - Do not summarize, rewrite, or clean the content unless the user asks for that specifically.
 - Prefer clipboard reading for chat output. The user can copy the latest response, then invoke `$say` or `/say` with no arguments.
 - If `CODEX_THREAD_ID` is present, `codex-say` can read the latest assistant response from the local transcript without copying or exposing the content to the model.
 - For `next`, the watcher must ignore commentary/progress messages and wait for `phase=final_answer`.
+- For automatic mode, the watcher must remain thread-scoped and only speak future `phase=final_answer` messages from the local transcript.
 - Prefer `codex-say -f <path>` for Markdown reports.
 - Keep the assistant response tiny after starting or stopping speech.
 
@@ -62,6 +74,11 @@ Useful options:
 ```bash
 codex-say --stop
 codex-say next
+codex-say auto on
+codex-say auto off
+codex-say auto status
+codex-say auto speed 1.5x
+codex-say auto rate 220
 codex-say --next --timeout 240
 codex-say --latest
 codex-say --clipboard
@@ -77,9 +94,11 @@ Background speech is handed to macOS `launchctl` so it survives Codex shell clea
 
 Speech is exclusive by default: starting a new read-aloud command cancels active speech and pending `next` watchers first. This prevents stacked voices.
 
-Stop also removes stale `com.botanium.codex-say...` launchd jobs; this matters because old launchd labels can restart speech after the visible `say` process is killed.
+Stop removes active speech and pending one-shot `next` watchers. It intentionally leaves automatic mode enabled so `/say stop` can be used as a pause. Use `/say auto off` or `$say auto off` to disable future automatic read-aloud.
 
 `next` is one-shot: after it reads one final answer or times out, its watcher removes its own launchd label and exits. It should not read the same answer again.
+
+Automatic mode is thread-scoped: it stores local state in `~/.local/state/codex-say`, remembers the transcript cursor, and reads each future final answer once.
 
 Code blocks are skipped silently by default to preserve natural listening flow. Inline code remains readable because command names, flags, and file paths are often meaningful.
 
@@ -89,7 +108,9 @@ For the lowest-token workflow, tell the user:
 
 1. Invoke `$say` or `/say` with no pasted text to read the latest Codex response when available.
 2. Add `$say next` or `/say next` to a prompt when the user wants the answer currently being generated to be read automatically.
-3. If that is not available, copy the chat output or report text and invoke `$say clipboard` or `/say clipboard`.
-4. Stop speech with `/say stop`, `$say stop`, or `saychat --stop`.
+3. Use `$say auto on` or `/say auto on` when the user wants every future final answer in the current thread read aloud.
+4. Disable automatic mode with `$say auto off` or `/say auto off`.
+5. If that is not available, copy the chat output or report text and invoke `$say clipboard` or `/say clipboard`.
+6. Stop current speech with `/say stop`, `$say stop`, or `saychat --stop`.
 
 For a completely model-free workflow, recommend macOS Spoken Content: select text on screen and use the system "Speak selected text" shortcut, commonly Option-Esc when enabled.
