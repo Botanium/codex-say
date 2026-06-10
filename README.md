@@ -9,6 +9,8 @@ This skill uses macOS `say` locally, so speech does not send the spoken text thr
 - Read the latest Codex final answer from the local transcript.
 - Read the next final answer automatically with `next`.
 - Turn on thread-scoped automatic read-aloud for every future final answer.
+- Queue automatic read-aloud responses from background threads instead of speaking over the active thread.
+- Resume automatic speech around the interrupted chunk when the active thread changes or speech is stopped.
 - Read clipboard text, inline text, or Markdown files.
 - Use speed multipliers such as `--speed 1x`, `--speed 1.5x`, and `--speed 2x`.
 - Skip fenced code blocks silently for a more natural listening flow.
@@ -58,6 +60,8 @@ In Codex chat:
 /say auto status
 /say clipboard
 /say stop
+/say focus
+/say queue
 
 $say
 $say next
@@ -66,6 +70,8 @@ $say auto off
 $say auto status
 $say clipboard
 $say stop
+$say focus
+$say queue
 ```
 
 In a terminal:
@@ -78,6 +84,8 @@ codex-say --clipboard
 codex-say auto on
 codex-say auto speed 1.5x
 codex-say auto status
+codex-say focus
+codex-say queue
 codex-say auto off
 codex-say --stop
 ```
@@ -111,6 +119,16 @@ Check or disable it:
 ```
 
 Automatic mode is thread-scoped. It watches the local Codex transcript, remembers the last line it already handled, and only speaks future `final_answer` messages. `/say stop` stops the current voice and pending one-shot `next` watchers; `/say auto off` disables automatic future answers.
+
+When multiple Codex threads have automatic mode on, responses are queued locally per thread. Only the active thread is allowed to speak, so a background thread finishing should not interrupt the thread you are listening to. Speech is chunked, so a focus change or stop can resume near the interrupted chunk later instead of replaying the whole answer.
+
+Today, Codex Desktop does not expose a public local focus event to skills. `codex-say focus` marks the current thread active and drains its queued responses. The helper also has an internal `--set-active-thread` hook so a future Codex/plugin focus signal can drive this without changing the queue design.
+
+Inspect queued automatic responses:
+
+```text
+/say queue
+```
 
 ## Token Note
 
