@@ -23,6 +23,28 @@ XDG_CONFIG_HOME="$tmp_config_home" "$helper" --dry-run "hello" | grep -q "210 wp
 XDG_CONFIG_HOME="$tmp_config_home" "$helper" --dry-run -r 180 "hello" | grep -q "180 wpm"
 rm -rf "$tmp_config_home"
 
+citation_sample="$(mktemp -t codex-say-citation-sample)"
+cat > "$citation_sample" <<'EOF'
+Useful answer.
+
+<oai-mem-citation>
+<citation_entries>
+MEMORY.md:1-2|note=[internal]
+</citation_entries>
+<rollout_ids>
+00000000-0000-0000-0000-000000000000
+</rollout_ids>
+</oai-mem-citation>
+
+2 memory citations
+EOF
+"$helper" --dry-run -f "$citation_sample" | grep -q "Would speak 14 characters"
+if "$helper" --dry-run -f "$citation_sample" | grep -qi "memory"; then
+  echo "Memory citation text leaked into dry-run output" >&2
+  exit 1
+fi
+rm -f "$citation_sample"
+
 hardcoded_home_pattern="$(printf '/%s/' 'Users')"
 if grep -R "$hardcoded_home_pattern" "$repo_root/skills/say" >/dev/null; then
   echo "Found local hardcoded path in skill files" >&2

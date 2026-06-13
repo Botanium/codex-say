@@ -558,6 +558,8 @@ PY
 clean_markdown_text() {
   /usr/bin/perl -0pe '
     s/\r\n/\n/g;
+    s/<oai-mem-citation\b[^>]*>.*?<\/oai-mem-citation>//gs;
+    s/^\s*<?\s*\d+\s+memory citations?\s*>?\s*$//mig;
     s/```[^\n]*\n.*?```/\n/gs;
     s/`([^`\n]+)`/$1/g;
     s/!\[([^\]]*)\]\([^)]+\)/$1/g;
