@@ -1,5 +1,6 @@
 # Python regular expressions removed before Markdown cleanup and speech.
 # Blank lines and lines starting with # are ignored.
+# Use "pattern => replacement" to speak a short placeholder instead of removing text.
 
 # Codex memory citation payloads and the collapsed visible citation row.
 (?is)<oai-mem-citation\b[^>]*>.*?</oai-mem-citation>
@@ -8,3 +9,12 @@
 # GitHub/Git commit hash noise in final status summaries.
 (?im)^[^\S\n]*(?:pushed commit|commit|github commit|pushed to github|latest commit)[^\S\n]*:?[^\S\n]*`?[0-9a-f]{7,40}`?\.?[^\S\n]*$
 (?i)\b[0-9a-f]{40}\b
+
+# Long links and path-like strings are too noisy for read-aloud.
+(?i)\bhttps?://[^\s<>)\]]*[^\s<>)\].,!?;:]([.,!?;:]?) => this link\1
+(?i)\bfile://[^\s<>)\]]*[^\s<>)\].,!?;:]([.,!?;:]?) => this path\1
+(?<![\w.-])~/(?:[^\s<>)\]]*[^\s<>)\].,!?;:])([.,!?;:]?) => this path\1
+(?<![\w.-])/(?:Users|var|tmp|private|Applications|Volumes|System|Library|opt|usr|bin|sbin|etc|dev|home|mnt)/[^\s<>)\]]*[^\s<>)\].,!?;:]([.,!?;:]?) => this path\1
+(?<![\w.-])(?:\.{1,2}/)[^\s<>)\]]*[^\s<>)\].,!?;:]([.,!?;:]?) => this path\1
+(?<![\w.-])(?:[A-Za-z0-9_.@%+=:,~-]+/){2,}[A-Za-z0-9_.@%+=:,~-]+([.,!?;:]?) => this path\1
+(?<![\w.-])(?:[A-Za-z0-9_.@%+=:,~-]+/)+[A-Za-z0-9_.@%+=:,~-]+\.[A-Za-z0-9][A-Za-z0-9_.-]*([.,!?;:]?) => this path\1

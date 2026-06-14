@@ -13,7 +13,7 @@ This skill uses macOS `say` locally, so speech does not send the spoken text thr
 - Save a default speech rate such as `210 wpm`.
 - Use speed multipliers such as `--speed 1x`, `--speed 1.5x`, and `--speed 2x`.
 - Read fenced code block contents while skipping the backtick fences.
-- Skip noisy metadata such as memory citations and Git commit hashes.
+- Skip or shorten noisy metadata such as memory citations, Git commit hashes, raw links, and file paths.
 - Stop active speech and stale launchd jobs with one command.
 
 ## Install as a Codex plugin
@@ -144,13 +144,19 @@ Codex Say removes noisy text before speaking. Packaged defaults live in:
 skills/say/config/skip-patterns.txt
 ```
 
-That file currently skips Codex memory citations and Git commit hashes. You can add personal skip rules without editing the plugin:
+That file currently skips Codex memory citations and Git commit hashes. It also shortens raw links and path-like strings so they are spoken as `this link` or `this path` instead of long URLs or filesystem paths. Markdown links still use their readable label, so `[the repo](https://example.com)` is spoken as `the repo`.
+
+You can add personal skip rules without editing the plugin:
 
 ```bash
 ~/.config/codex-say/skip-patterns.txt
 ```
 
-Each non-empty, non-comment line is a Python regular expression removed before Markdown cleanup.
+Each non-empty, non-comment line is a Python regular expression removed before Markdown cleanup. To speak a short placeholder instead of removing the match, use:
+
+```text
+pattern => replacement
+```
 
 ## Why not Whisper?
 

@@ -580,8 +580,13 @@ for pattern_path in sys.argv[1:]:
         pattern = raw_pattern.strip()
         if not pattern or pattern.startswith("#"):
             continue
+        replacement = ""
+        if "=>" in pattern:
+            pattern, replacement = (part.strip() for part in pattern.split("=>", 1))
+            if not pattern:
+                continue
         try:
-            text = re.sub(pattern, "", text, flags=re.MULTILINE)
+            text = re.sub(pattern, replacement, text, flags=re.MULTILINE)
         except re.error as exc:
             print(
                 f"Warning: invalid skip pattern {pattern_path}:{line_number}: {exc}",
@@ -1023,7 +1028,7 @@ if [[ -z "${text//[[:space:]]/}" ]]; then
   exit 1
 fi
 
-if [[ "$watch_next_internal" -eq 0 ]]; then
+if [[ "$dry_run" -eq 0 && "$watch_next_internal" -eq 0 ]]; then
   cleanup_codex_say_processes 1 0
 fi
 

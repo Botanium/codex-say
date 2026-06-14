@@ -71,6 +71,40 @@ EOF
 "$helper" --dry-run -f "$codeblock_sample" | grep -q "Would speak 41 characters"
 rm -f "$codeblock_sample"
 
+link_path_sample="$(mktemp -t codex-say-link-path-sample)"
+cat > "$link_path_sample" <<'EOF'
+Open https://github.com/Botanium/codex-say-skill and inspect /Users/botanium/Documents/Codex/report.md.
+Then check skills/say/config/skip-patterns.txt.
+EOF
+"$helper" --dry-run -f "$link_path_sample" | grep -q "Would speak 58 characters"
+rm -f "$link_path_sample"
+
+markdown_link_sample="$(mktemp -t codex-say-markdown-link-sample)"
+cat > "$markdown_link_sample" <<'EOF'
+Read [the repo](https://github.com/Botanium/codex-say-skill) and [the file](/Users/botanium/Documents/Codex/report.md).
+EOF
+"$helper" --dry-run -f "$markdown_link_sample" | grep -q "Would speak 27 characters"
+rm -f "$markdown_link_sample"
+
+codeblock_link_path_sample="$(mktemp -t codex-say-codeblock-link-path-sample)"
+cat > "$codeblock_link_path_sample" <<'EOF'
+Run this:
+
+```bash
+cat /Users/botanium/Documents/Codex/report.md
+open https://github.com/Botanium/codex-say-skill
+```
+EOF
+"$helper" --dry-run -f "$codeblock_link_path_sample" | grep -q "Would speak 39 characters"
+rm -f "$codeblock_link_path_sample"
+
+repo_slug_sample="$(mktemp -t codex-say-repo-slug-sample)"
+cat > "$repo_slug_sample" <<'EOF'
+Repo slug Botanium/codex-say-skill should stay readable.
+EOF
+"$helper" --dry-run -f "$repo_slug_sample" | grep -q "Would speak 56 characters"
+rm -f "$repo_slug_sample"
+
 hardcoded_home_pattern="$(printf '/%s/' 'Users')"
 if grep -R "$hardcoded_home_pattern" "$repo_root/skills/say" >/dev/null; then
   echo "Found local hardcoded path in skill files" >&2
